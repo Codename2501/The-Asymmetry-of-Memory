@@ -1,267 +1,250 @@
-// Matsui V7.6 - The Mirror Universe (Relative Coordinate Hashing & Auto-Scan)
-// Build: clang -framework SDL2 -O3 -o matsui_stream matsui_stream_v7_6.c
+// Matsui V9.0 - The Final Verdict (Safe Render + Sequential Logic)
+// Build: clang -framework SDL2 -O3 -o matsui_final matsui_final.c
 #include <SDL2/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
-#include <dispatch/dispatch.h>
 #include <time.h>
 
-#define N 129 // Odd number to prevent ghost-swapping
+// --- 設定 ---
+#define N 128
 #define TOTAL_POINTS (N * N * N)
 #define SCREEN_SIZE 800
 #define CELL_SIZE (SCREEN_SIZE / N)
+#define INIT_DENSITY 10 // 10%くらいでスタート
 
-#define SPAWN_RATE 40
-#define LIFE_SPAN 120
+typedef enum
+{
+    TYPE_VOID,
+    TYPE_RED,
+    TYPE_BLUE
+} CellType;
 
-typedef enum { TYPE_VOID, TYPE_PLUS, TYPE_MINUS, TYPE_FLASH } CellType;
-
-typedef struct {
+typedef struct
+{
     CellType type;
-    int32_t life;
     uint32_t id;
 } Node;
 
 static Node *src_universe = NULL;
 static Node *dst_universe = NULL;
 
-// Statistics for monitoring
-static volatile int32_t current_pop_red = 0;
-static volatile int32_t current_pop_blue = 0;
-static int32_t total_spawn_red = 0;
-static int32_t total_spawn_blue = 0;
+static int count_red = 0;
+static int count_blue = 0;
 
 static inline int idx(int x, int y, int z) { return x + y * N + z * N * N; }
-
-// Hash Function (Keys removed)
-// Uses 'relative_y' to ensure mathematical symmetry between Red and Blue.
-static inline uint32_t hash_rand(int x, int relative_y, int z, uint32_t t) {
-    uint32_t h = (uint32_t)x * 374761393U + (uint32_t)relative_y * 668265263U + (uint32_t)z * 352462463U + t;
-    h = (h ^ (h >> 13)) * 1274126177U;
-    return h ^ (h >> 16);
+static inline int wrap(int v)
+{
+    if (v < 0)
+        return v + N;
+    if (v >= N)
+        return v - N;
+    return v;
 }
 
-static inline int wrap_x(int x) {
-    if (x < 0) return x + N;
-    if (x >= N) return x - N;
-    return x;
+// 疑似乱数
+static uint32_t xor_rnd(uint32_t y)
+{
+    y ^= (y << 13);
+    y ^= (y >> 17);
+    return y ^ (y << 5);
 }
 
-static inline int get_drift(uint32_t id, uint32_t t) {
-    uint32_t h = hash_rand(id, 0, 0, t); // ID-based jitter
-    int r = h % 100;
-    if (r < 40) return 0;
-    if (r < 70) return 1;
-    return -1;
-}
-
-void init_mirror() {
-    if (src_universe) free(src_universe);
-    if (dst_universe) free(dst_universe);
+void init_final()
+{
     src_universe = (Node *)calloc(TOTAL_POINTS, sizeof(Node));
     dst_universe = (Node *)calloc(TOTAL_POINTS, sizeof(Node));
-    if (!src_universe || !dst_universe) exit(1);
-    for(int i=0; i<TOTAL_POINTS; i++) src_universe[i].type = TYPE_VOID;
+
+    for (int i = 0; i < TOTAL_POINTS; i++)
+    {
+        int r = rand() % 100;
+        if (r < INIT_DENSITY / 2)
+        {
+            src_universe[i].type = TYPE_RED;
+            src_universe[i].id = rand();
+        }
+        else if (r < INIT_DENSITY)
+        {
+            src_universe[i].type = TYPE_BLUE;
+            src_universe[i].id = rand();
+        }
+        else
+        {
+            src_universe[i].type = TYPE_VOID;
+        }
+    }
 }
 
-void step_mirror(uint32_t frame_count) {
-    current_pop_red = 0;
-    current_pop_blue = 0;
-    
-    __block int32_t frame_spawn_red = 0;
-    __block int32_t frame_spawn_blue = 0;
+// ★ここが核心：不公平なステップ処理★
+void step_unfair()
+{
+    count_red = 0;
+    count_blue = 0;
 
-    dispatch_apply(N, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^(size_t z) {
-        int32_t local_pop_red = 0;
-        int32_t local_pop_blue = 0;
-        int32_t local_spawn_red = 0;
-        int32_t local_spawn_blue = 0;
+    // 1. 未来をクリア
+    for (int i = 0; i < TOTAL_POINTS; i++)
+        dst_universe[i].type = TYPE_VOID;
 
-        for (int y = 0; y < N; y++) {
-            for (int x = 0; x < N; x++) {
-                int i = idx(x, y, (int)z);
-                
-                Node out;
-                out.type = TYPE_VOID;
-                out.life = 0;
-                out.id = 0;
-                
-                if (src_universe[i].type == TYPE_FLASH) {
-                    out.type = TYPE_FLASH;
-                    out.life = src_universe[i].life - 10;
-                    if (out.life <= 0) out.type = TYPE_VOID;
-                    dst_universe[i] = out;
-                    continue;
-                }
+    // 2. 0番地から順に処理（i++）
+    // これにより、indexが小さい粒子（画面左上、またはメモリの前方）が
+    // 移動先の空席を「先に」確保する権利を持つ。
+    for (int i = 0; i < TOTAL_POINTS; i++)
+    {
+        Node self = src_universe[i];
+        if (self.type == TYPE_VOID)
+            continue;
 
-                // Detection Logic
-                Node in_plus; in_plus.type = TYPE_VOID;
-                int up_y = y - 1;
-                if (up_y >= 0) {
-                    int offsets[] = {0, -1, 1};
-                    for (int k=0; k<3; k++) {
-                        int tx = wrap_x(x + offsets[k]);
-                        int ti = idx(tx, up_y, (int)z);
-                        Node n = src_universe[ti];
-                        if (n.type == TYPE_PLUS) {
-                            int drift = (k==0) ? 0 : (k==1 ? 1 : -1);
-                            if (get_drift(n.id, frame_count) == drift) { in_plus = n; break; }
-                        }
-                    }
-                }
+        // 座標計算
+        int z = i / (N * N);
+        int rem = i % (N * N);
+        int y = rem / N;
+        int x = rem % N;
 
-                Node in_minus; in_minus.type = TYPE_VOID;
-                int down_y = y + 1;
-                if (down_y < N) {
-                    int offsets[] = {0, -1, 1};
-                    for (int k=0; k<3; k++) {
-                        int tx = wrap_x(x + offsets[k]);
-                        int ti = idx(tx, down_y, (int)z);
-                        Node n = src_universe[ti];
-                        if (n.type == TYPE_MINUS) {
-                            int drift = (k==0) ? 0 : (k==1 ? 1 : -1);
-                            if (get_drift(n.id, frame_count) == drift) { in_minus = n; break; }
-                        }
-                    }
-                }
+        // 移動方向決定
+        int dx = 0, dy = 0, dz = 0;
+        uint32_t r = xor_rnd(self.id + i);
 
-                // Collision and Movement
-                if (in_plus.type == TYPE_PLUS && in_minus.type == TYPE_MINUS) {
-                    out.type = TYPE_FLASH; out.life = 255;
-                }
-                else if (in_plus.type == TYPE_PLUS) {
-                    out = in_plus; out.life--;
-                    if (out.life <= 0) out.type = TYPE_VOID;
-                    else local_pop_red++;
-                }
-                else if (in_minus.type == TYPE_MINUS) {
-                    out = in_minus; out.life--;
-                    if (out.life <= 0) out.type = TYPE_VOID;
-                    else local_pop_blue++;
-                }
+        // 赤は右、青は左へ行きたがる
+        if (self.type == TYPE_RED)
+            dx = 1;
+        else
+            dx = -1;
 
-                // --- Mirror Spawn Logic ---
-                
-                if (y == 0) { // Ceiling (Red Spawn)
-                    // Relative Y: 0
-                    uint32_t r = hash_rand(x, 0, (int)z, frame_count) % 1000;
-                    if (r < SPAWN_RATE) {
-                        out.type = TYPE_PLUS; out.life = LIFE_SPAN; out.id = r;
-                        local_spawn_red++; local_pop_red++;
-                    }
-                }
-                else if (y == N - 1) { // Floor (Blue Spawn)
-                    // Relative Y: (N-1) - (N-1) = 0
-                    // Using '0' for Blue ensures it uses the EXACT SAME hash logic as Red.
-                    // If x, z, t are the same, Red and Blue share the exact same destiny.
-                    uint32_t r = hash_rand(x, 0, (int)z, frame_count) % 1000;
-                    if (r < SPAWN_RATE) {
-                        out.type = TYPE_MINUS; out.life = LIFE_SPAN; out.id = r;
-                        local_spawn_blue++; local_pop_blue++;
-                    }
-                }
-
-                dst_universe[i] = out;
-            }
+        // ランダム拡散 (30%)
+        if ((r % 100) < 30)
+        {
+            dy = (r % 3) - 1;
+            dz = ((r >> 2) % 3) - 1;
         }
-        
-        __sync_fetch_and_add(&current_pop_red, local_pop_red);
-        __sync_fetch_and_add(&current_pop_blue, local_pop_blue);
-        __sync_fetch_and_add(&frame_spawn_red, local_spawn_red);
-        __sync_fetch_and_add(&frame_spawn_blue, local_spawn_blue);
-    });
 
+        int tx = wrap(x + dx);
+        int ty = wrap(y + dy);
+        int tz = wrap(z + dz);
+        int target_i = idx(tx, ty, tz);
+
+        // ★椅子取りゲーム（早い者勝ち）★
+        // dst_universe[target_i] が空なら入れる。
+        // ここで「赤」と「青」が同じ場所を狙った場合、
+        // ループの前の方にいる粒子（確率的に赤が多い配置なら赤、あるいは左側の粒子）が勝つ。
+
+        if (dst_universe[target_i].type == TYPE_VOID)
+        {
+            dst_universe[target_i] = self;
+            if (self.type == TYPE_RED)
+                count_red++;
+            else
+                count_blue++;
+        }
+        else
+        {
+            // 移動失敗（衝突死）
+            // 席が埋まっていたら消滅するルールにすることで、勝敗を明確にする
+        }
+    }
+
+    // 入れ替え
     Node *tmp = src_universe;
     src_universe = dst_universe;
     dst_universe = tmp;
-    
-    total_spawn_red += frame_spawn_red;
-    total_spawn_blue += frame_spawn_blue;
 }
 
-void render_mirror(SDL_Renderer *ren, SDL_Texture *tex, int z_slice) {
-    static uint32_t *pixels = NULL;
-    if (!pixels) pixels = (uint32_t *)malloc(sizeof(uint32_t) * SCREEN_SIZE * SCREEN_SIZE);
+// 安全な描画（四角形）
+void render_safe(SDL_Renderer *ren, int z_slice)
+{
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255); // 背景黒
+    SDL_RenderClear(ren);
 
-    for (int y = 0; y < N; y++) {
-        for (int x = 0; x < N; x++) {
+    for (int y = 0; y < N; y++)
+    {
+        for (int x = 0; x < N; x++)
+        {
             int i = idx(x, y, z_slice);
             Node n = src_universe[i];
-            uint8_t r = 0, g = 0, b = 0;
-            
-            if (n.type == TYPE_PLUS) {
-                int val = n.life * 2; if(val>255) val=255;
-                r=val; g=val*0.8; b=0; 
-            }
-            else if (n.type == TYPE_MINUS) {
-                int val = n.life * 2; if(val>255) val=255;
-                r=0; g=val*0.8; b=val; 
-            }
-            else if (n.type == TYPE_FLASH) {
-                int val = n.life; if(val>255) val=255;
-                r=val; g=val; b=val;
-            }
-            
-            for (int py = 0; py < CELL_SIZE; py++) {
-                int yy = y * CELL_SIZE + py;
-                for (int px = 0; px < CELL_SIZE; px++) {
-                    int xx = x * CELL_SIZE + px;
-                    pixels[yy * SCREEN_SIZE + xx] = (255u<<24) | (b<<16) | (g<<8) | r;
+
+            if (n.type != TYPE_VOID)
+            {
+                SDL_Rect rect = {x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE};
+                if (n.type == TYPE_RED)
+                {
+                    SDL_SetRenderDrawColor(ren, 255, 50, 50, 255); // 赤
                 }
+                else
+                {
+                    SDL_SetRenderDrawColor(ren, 50, 50, 255, 255); // 青
+                }
+                SDL_RenderFillRect(ren, &rect);
             }
         }
     }
-    SDL_UpdateTexture(tex, NULL, pixels, SCREEN_SIZE * sizeof(uint32_t));
-    SDL_RenderCopy(ren, tex, NULL, NULL);
     SDL_RenderPresent(ren);
-    
-    printf("Z:%3d | POP: R %d vs B %d | SPAWN: R %d vs B %d\n", 
-           z_slice, current_pop_red, current_pop_blue, total_spawn_red, total_spawn_blue);
 }
 
-int main(int argc, char **argv) {
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) return 1;
-    SDL_Window *win = SDL_CreateWindow("Matsui V7.6: The Mirror Universe", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_SIZE, SCREEN_SIZE, 0);
+int main(int argc, char **argv)
+{
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Window *win = SDL_CreateWindow("Matsui V9.0: The Final Verdict", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_SIZE, SCREEN_SIZE, 0);
     SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
-    SDL_Texture *tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_STREAMING, SCREEN_SIZE, SCREEN_SIZE);
-    
-    init_mirror();
-    
-    int running = 1;
-    int z_slice = N/2;
-    uint32_t frame_count = 0;
-    
-    printf("V7.6 Mirror Universe. Auto-scanning Z-slices.\n");
 
-    while (running) {
+    srand(time(NULL));
+    init_final();
+
+    int running = 1;
+    int z = N / 2;
+    int speed = 1; // 高速モードで開始
+
+    printf("=== Matsui V9.0 Final ===\n");
+    printf("Visuals: Safe Mode (No Red Bug)\n");
+    printf("Logic  : Sequential Bias (i++ wins)\n");
+    printf("---------------------------\n");
+    printf("[SPACE]: Pause\n");
+    printf("[R]    : Reset\n");
+
+    while (running)
+    {
         SDL_Event e;
-        while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_QUIT) running = 0;
-            if (e.type == SDL_KEYDOWN) {
-                if (e.key.keysym.sym == SDLK_ESCAPE) running = 0;
-                if (e.key.keysym.sym == SDLK_r) {
-                    init_mirror();
-                    total_spawn_red = 0; total_spawn_blue = 0;
+        while (SDL_PollEvent(&e))
+        {
+            if (e.type == SDL_QUIT)
+                running = 0;
+            if (e.type == SDL_KEYDOWN)
+            {
+                if (e.key.keysym.sym == SDLK_ESCAPE)
+                    running = 0;
+                if (e.key.keysym.sym == SDLK_r)
+                    init_final();
+                if (e.key.keysym.sym == SDLK_SPACE)
+                {
+                    // ポーズ機能（簡易）
+                    printf("Paused. Press SPACE to resume.\n");
+                    while (1)
+                    {
+                        SDL_WaitEvent(&e);
+                        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_SPACE)
+                            break;
+                        if (e.type == SDL_QUIT)
+                        {
+                            running = 0;
+                            break;
+                        }
+                    }
                 }
-                // Manual Z-slice control
-                if (e.key.keysym.sym == SDLK_LEFT) z_slice = (z_slice - 1 + N) % N;
-                if (e.key.keysym.sym == SDLK_RIGHT) z_slice = (z_slice + 1) % N;
             }
         }
-        
-        step_mirror(frame_count++);
-        
-        // Auto-scan function: Moves the cross-section every 5 frames to scan the entire universe
-        if (frame_count % 5 == 0) {
-            z_slice = (z_slice + 1) % N;
-        }
-        
-        render_mirror(ren, tex, z_slice);
+
+        // 不公平な処理を実行
+        step_unfair();
+        render_safe(ren, z);
+
+        // ログ出力：今度こそ「赤が増える」はず
+        printf("\rRed: %6d vs Blue: %6d | Ratio: %.1f%%  ",
+               count_red, count_blue,
+               (double)count_red / (count_red + count_blue + 1) * 100.0);
+        fflush(stdout);
     }
-    
-    free(src_universe); free(dst_universe);
-    SDL_DestroyTexture(tex); SDL_DestroyRenderer(ren); SDL_DestroyWindow(win); SDL_Quit();
+
+    SDL_DestroyRenderer(ren);
+    SDL_DestroyWindow(win);
+    SDL_Quit();
     return 0;
 }
