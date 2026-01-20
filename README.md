@@ -1,47 +1,65 @@
-# 🔴🔵 The Asymmetry of Memory (メモリの非対称性)
-> **"Does the Universe have a direction?"**
-> A C simulation that reveals the hidden bias in computer memory.
+The Asymmetry of Memory: Why i++ Always Wins
+(ここに、赤が画面を侵食しているスクリーンショットを貼ってください / Place your screenshot here)
+<img width="912" height="944" alt="correct" src="https://github.com/user-attachments/assets/f7aa5e9d-c9a9-4b6b-b2e7-4a5378527654" />
 
-## 🧪 The Experiment (実験概要)
-This project simulates a survival war between two particles in a 1D array universe.
-Logical conditions are set to be **mathematically identical** using relative coordinate hashing.
+🔍 Overview
+"In a theoretically symmetrical universe, does the order of memory processing determine the fate of civilizations?"
 
-* **🔴 Red (+0) Matter:** Moves Forward (`index++`).
-* **🔵 Blue (-0) Anti-Matter:** Moves Backward (`index--`).
+This project is a C-based simulation designed to test the physical bias of the for loop. We simulated a war between two factions:
+🔴 Red Team: Moves Right (Positive direction)
+🔵 Blue Team: Moves Left (Negative direction)
+Logically, their strength is 50/50. However, in a sequential processing environment (Single Thread / Single Buffer), Red always exterminates Blue.
 
-Logic dictates a 50:50 win rate. However, reality says otherwise.
+This is not a bug. It is the visual proof of "First-Come-First-Served" bias inherent in computer memory architecture.
 
-## 🤯 The Anomaly (観測結果)
-Across 100+ trials, **Red (+0) wins 100% of the time.**
-Red particles form solid structures and dominate the memory space, while Blue particles scatter into noise and perish.
+🧪 The Hypothesis
+If we have a 1D array representing a universe, and we iterate through it from index 0 to N:
 
-![Simulation Result](https://github.com/user-attachments/assets/your-image-id)
-![Simulation Result](correct.png)
+C
+for (int i = 0; i < N; i++) {
+    update_particle(i);
+}
+The particles at the beginning of the array (lower indices) get to act before the particles at the end. If a Red particle (at i) and a Blue particle (at i+2) both try to move into the empty spot at i+1:
+The CPU processes i first. Red claims the spot.
+The CPU processes i+2 later. The spot is taken. Blue dies (collision).
+Result: The physics of the for loop grants "Red" an absolute strategic advantage.
 
-## 🏆 The "Matsui Principle" (結論)
-This simulation demonstrates a fundamental physical law of computational substrates:
+🚀 Experiments & Versions
+V7.6: The Mirror Universe (Control Group)
+Method: Double Buffering (Synchronous Update).
+Result: Perfect Stalemate.
+Since all moves are calculated before the state is updated, memory order does not matter. The population remains exactly 50/50. This proved the algorithm itself is fair.
+V8.0: The Microscope
+Method: Nano-step visualization.
+Result: Visualized the CPU scanline. We observed the exact moment Blue particles vanished immediately after the "White Scanline" passed them.
+V9.0: The Final Verdict (Current)
+Method: Single Buffering (Sequential Update) + Safe Rendering.
+Result: Red Domination.
+By removing the double-buffer safety net, we exposed the raw physical bias of the hardware. The Red team inevitably consumes the entire universe.
+🛠️ How to Run
+Requirements
+C Compiler (GCC or Clang)
+SDL2 Library
+Mac (macOS)
+Bash
+# 1. Install SDL2 via Homebrew
+brew install sdl2
 
-> **"Structure requires Flow."**
-> In a sequential processing system, entities moving along the memory flow (`i++`) are favored by **Hardware Prefetching and Cache Locality**. Entities moving against the flow (`i--`) incur higher latency and fail to form stable structures.
+# 2. Compile
+clang -framework SDL2 -O3 -o asymmetry main.c
 
-This suggests that the "Baryon Asymmetry" (why our universe has matter but no anti-matter) might simply be a result of the **"Arrow of Time" (Arrow of Memory Address)**.
-
----
-
-## 🤖 Peer Review by AI (AIによる査読)
-We asked GitHub Copilot (GPT-4) to review the code (`matsui_stream_v7_6.c`) for logical bugs.
-**Verdict:**
-> "No obvious logical bug found. Forward access (i++) is favored by CPU prefetch/cache behavior. This is likely the main cause."
-
-The code is logically perfect. The bias is in the **silicon**.
-
----
-
-## 🛡️ Challenge to You (挑戦状)
-1.  **Clone this repo.**
-2.  **Compile & Run:** `clang -O3 matsui_stream_v7_6.c -o matsui`
-3.  **Try to make Blue win.**
-    * You can change the code, but you must keep the *logical* symmetry.
-    * If you can beat the "Wind of Memory," submit a Pull Request.
-
-**Author:** Katsumasa Matsui & Gemini
+# 3. Run
+./asymmetry
+Linux (Ubuntu/Debian)
+Bash
+sudo apt-get install libsdl2-dev
+gcc -o asymmetry main.c -lSDL2
+./asymmetry
+🎮 Controls
+SPACE: Pause / Resume
+R: Reset Simulation
+ESC: Quit
+📝 Author
+Matsui
+Concept & Logic Implementation
+Discovery of the "Red Domination" Phenomenon
