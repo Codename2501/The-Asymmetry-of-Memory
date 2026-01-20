@@ -16,7 +16,7 @@ Across 100+ trials, **Red (+0) wins 100% of the time.**
 Red particles form solid structures and dominate the memory space, while Blue particles scatter into noise and perish.
 
 ![Simulation Result](https://github.com/user-attachments/assets/your-image-id)
-*(Paste your screenshot here / ここに赤が支配したスクリーンショットを貼ってください)*
+![Simulation Result](matsui_evidence.jpg)
 
 ## 🏆 The "Matsui Principle" (結論)
 This simulation demonstrates a fundamental physical law of computational substrates:
